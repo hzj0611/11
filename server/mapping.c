@@ -225,6 +225,14 @@ static const mem_size_t granularity_mask = 0xffff;
 static struct addr_range ranges32;
 static struct addr_range ranges64;
 
+struct session
+{
+    const session_object_t *objects;
+    unsigned int object_capacity;
+};
+static struct mapping *session_mapping;
+static struct session session;
+
 #define ROUND_SIZE(size)  (((size) + page_mask) & ~page_mask)
 
 void init_memory(void)
@@ -1254,6 +1262,41 @@ void free_map_addr( client_ptr_t base, mem_size_t size )
 int get_page_size(void)
 {
     return page_mask + 1;
+}
+
+struct mapping *create_session_mapping( struct object *root, const struct unicode_str *name,
+                                        unsigned int attr, const struct security_descriptor *sd )
+{
+    static const unsigned int access = FILE_READ_DATA | FILE_WRITE_DATA;
+    mem_size_t size = max( sizeof(*session.objects) * 512, 0x10000 );
+
+    return create_mapping( root, name, attr, size, SEC_COMMIT, 0, access, sd );
+}
+
+static void mark_session_object_free( const session_object_t *object )
+{
+    SHARED_WRITE_BEGIN( &object->shm, object_shm_t )
+    {
+        /* mark the object data as not accessible */
+        mark_block_noaccess( (void *)shared, sizeof(*shared) );
+        CONTAINING_RECORD( shared, session_object_t, shm )->id = 0;
+    }
+    SHARED_WRITE_END;
+}
+
+void set_session_mapping( struct mapping *mapping )
+{
+    unsigned int index;
+
+    session.objects = mmap( NULL, mapping->size, PROT_READ | PROT_WRITE, MAP_SHARED, get_unix_fd( mapping->fd ), 0 );
+    if (session.objects == MAP_FAILED) return;
+
+    session_mapping = mapping;
+    session.object_capacity = mapping->size / sizeof(session_object_t);
+    assert( session.object_capacity != -1 );
+
+    for (index = 0; index < session.object_capacity; index++)
+        mark_session_object_free( &session.objects[index] );
 }
 
 struct object *create_user_data_mapping( struct object *root, const struct unicode_str *name,
