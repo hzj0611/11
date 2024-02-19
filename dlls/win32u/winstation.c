@@ -22,9 +22,13 @@
 #pragma makedep unix
 #endif
 
+#include <assert.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <pthread.h>
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
-#include <stdarg.h>
 #include "windef.h"
 #include "winbase.h"
 #include "ntuser.h"
@@ -39,6 +43,97 @@ WINE_DECLARE_DEBUG_CHANNEL(win);
 
 
 #define DESKTOP_ALL_ACCESS 0x01ff
+
+struct shared_session
+{
+    LONG ref;
+    unsigned int object_capacity;
+    const session_object_t *objects;
+};
+
+static pthread_mutex_t session_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct shared_session *shared_session;
+
+static struct shared_session *shared_session_acquire( struct shared_session *session )
+{
+    int ref = InterlockedIncrement( &session->ref );
+    TRACE( "session %p incrementing ref to %d\n", session, ref );
+    return session;
+}
+
+static void shared_session_release( struct shared_session *session )
+{
+    int ref = InterlockedDecrement( &session->ref );
+    TRACE( "session %p decrementing ref to %d\n", session, ref );
+    if (!ref)
+    {
+        NtUnmapViewOfSection( GetCurrentProcess(), (void *)session->objects );
+        free( session );
+    }
+}
+
+static NTSTATUS open_shared_session_section( struct shared_session *session )
+{
+    static const WCHAR nameW[] =
+    {
+        '\\','K','e','r','n','e','l','O','b','j','e','c','t','s','\\',
+        '_','_','w','i','n','e','_','s','e','s','s','i','o','n',0
+    };
+    UNICODE_STRING name = RTL_CONSTANT_STRING( nameW );
+    OBJECT_ATTRIBUTES attr;
+    unsigned int status;
+    SIZE_T size = 0;
+    HANDLE handle;
+
+    InitializeObjectAttributes( &attr, &name, 0, NULL, NULL );
+    if ((status = NtOpenSection( &handle, SECTION_MAP_READ, &attr ))) return status;
+    if (!(status = NtMapViewOfSection( handle, GetCurrentProcess(), (void **)&session->objects, 0, 0,
+                                       NULL, &size, ViewUnmap, 0, PAGE_READONLY )))
+    {
+        session->object_capacity = size / sizeof(session_object_t);
+        assert( session->object_capacity != -1 );
+    }
+
+    NtClose( handle );
+    return status;
+}
+
+static NTSTATUS get_shared_session( BOOL force, struct shared_session **ret )
+{
+    TRACE( "force %u\n", force );
+
+    pthread_mutex_lock( &session_lock );
+
+    if (force || !shared_session)
+    {
+        struct shared_session *session;
+        unsigned int status;
+
+        if (!(session = calloc( 1, sizeof(*session) )))
+        {
+            pthread_mutex_unlock( &session_lock );
+            return STATUS_NO_MEMORY;
+        }
+
+        if ((status = open_shared_session_section( session )))
+        {
+            pthread_mutex_unlock( &session_lock );
+            ERR( "Failed to open shared session mapping, status %#x\n", status );
+            free( session );
+            return STATUS_UNSUCCESSFUL;
+        }
+
+        if (shared_session) shared_session_release( shared_session );
+        shared_session = session;
+        session->ref = 1;
+    }
+
+    *ret = shared_session_acquire( shared_session );
+
+    pthread_mutex_unlock( &session_lock );
+
+    return STATUS_SUCCESS;
+}
 
 BOOL is_virtual_desktop(void)
 {
@@ -630,11 +725,16 @@ void winstation_init(void)
 {
     RTL_USER_PROCESS_PARAMETERS *params = NtCurrentTeb()->Peb->ProcessParameters;
     WCHAR *winstation = NULL, *desktop = NULL, *buffer = NULL;
+    struct shared_session *session;
     HANDLE handle, dir = NULL;
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING str;
+    NTSTATUS status;
 
     static const WCHAR winsta0[] = {'W','i','n','S','t','a','0',0};
+
+    if (!(status = get_shared_session( FALSE, &session )))
+        shared_session_release( session );
 
     if (params->Desktop.Length)
     {
