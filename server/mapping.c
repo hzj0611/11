@@ -1370,6 +1370,13 @@ void free_shared_object( unsigned int index )
     mark_session_object_free( &session.objects[index] );
 }
 
+obj_locator_t get_session_object_locator( unsigned int index )
+{
+    obj_locator_t locator = {.index = index};
+    if (index < session.object_capacity) locator.id = session.objects[index].id;
+    return locator;
+}
+
 const desktop_shm_t *get_shared_desktop( unsigned int index )
 {
     if (index >= session.object_capacity) return NULL;

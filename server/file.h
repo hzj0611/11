@@ -194,6 +194,7 @@ extern void set_session_mapping( struct mapping *mapping );
 
 extern unsigned int alloc_shared_object(void);
 extern void free_shared_object( unsigned int index );
+extern obj_locator_t get_session_object_locator( unsigned int index );
 extern const desktop_shm_t *get_shared_desktop( unsigned int index );
 
 #define SHARED_WRITE_BEGIN( object_shm, type )                          \

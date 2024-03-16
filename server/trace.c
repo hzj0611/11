@@ -467,6 +467,13 @@ static void dump_hw_input( const char *prefix, const hw_input_t *input )
     }
 }
 
+static void dump_obj_locator( const char *prefix, const obj_locator_t *locator )
+{
+    fprintf( stderr, "%s{", prefix );
+    dump_uint64( "id=", &locator->id );
+    fprintf( stderr, ",index=%u}", locator->index );
+}
+
 static void dump_luid( const char *prefix, const struct luid *luid )
 {
     fprintf( stderr, "%s%d.%u", prefix, luid->high_part, luid->low_part );
