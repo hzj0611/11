@@ -2385,7 +2385,11 @@ static BOOL mpeg_splitter_filter_init_gst(struct parser *filter)
             if (!create_pin(filter, wg_parser_get_stream(parser, i), L"Audio"))
                 return FALSE;
         }
-        else FIXME("unexpected format %u\n", fmt.major_type);
+        else
+        {
+            TRACE("unexpected format %u\n", fmt.major_type);
+            return FALSE;
+        }
     }
 
     return TRUE;
