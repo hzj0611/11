@@ -488,17 +488,10 @@ BOOL WINAPI NtUserSetThreadDesktop( HDESK handle )
         struct user_thread_info *thread_info = get_user_thread_info();
         struct user_key_state_info *key_state_info = thread_info->key_state;
         obj_locator_t *locator = &get_session_thread_data()->shared_desktop;
-        struct object_lock lock = OBJECT_LOCK_INIT;
-        const desktop_shm_t *desktop_shm;
-
         thread_info->client_info.top_window = 0;
         thread_info->client_info.msg_window = 0;
         if (key_state_info) key_state_info->time = 0;
         memset( locator, 0, sizeof(*locator) );
-
-        while (get_shared_desktop( &lock, &desktop_shm ) == STATUS_PENDING)
-            /* nothing */;
-
         if (was_virtual_desktop != is_virtual_desktop()) update_display_cache( TRUE );
     }
     return ret;
