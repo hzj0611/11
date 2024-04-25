@@ -878,8 +878,13 @@ typedef struct
 /****************************************************************/
 /* shared session mapping structures */
 
+typedef volatile struct
+{
+} desktop_shm_t;
+
 typedef volatile union
 {
+    desktop_shm_t        desktop;
 } object_shm_t;
 
 typedef volatile struct

@@ -229,6 +229,8 @@ struct session
 {
     const session_object_t *objects;
     unsigned int object_capacity;
+    unsigned int last_object_index;
+    object_id_t last_object_id;
 };
 static struct mapping *session_mapping;
 static struct session session;
@@ -1294,9 +1296,84 @@ void set_session_mapping( struct mapping *mapping )
     session_mapping = mapping;
     session.object_capacity = mapping->size / sizeof(session_object_t);
     assert( session.object_capacity != -1 );
+    session.last_object_index = -1;
 
     for (index = 0; index < session.object_capacity; index++)
         mark_session_object_free( &session.objects[index] );
+}
+
+static int grow_session_mapping(void)
+{
+    unsigned int index, capacity;
+    mem_size_t size;
+    int unix_fd;
+    void *tmp;
+
+    capacity = session.object_capacity * 3 / 2;
+    size = sizeof(session_object_t) * capacity;
+    size = (size + page_mask) & ~((mem_size_t)page_mask);
+    capacity = size / sizeof(session_object_t);
+    assert( capacity > session.object_capacity );
+
+    unix_fd = get_unix_fd( session_mapping->fd );
+    if (!grow_file( unix_fd, size )) return -1;
+
+    if ((tmp = mmap( NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, unix_fd, 0 )) == MAP_FAILED)
+    {
+        file_set_error();
+        return -1;
+    }
+    munmap( (void *)session.objects, session_mapping->size );
+    session.objects = tmp;
+
+    for (index = session.object_capacity; index < capacity; index++)
+        mark_session_object_free( &session.objects[index] );
+
+    session_mapping->size = size;
+    session.object_capacity = capacity;
+    assert( session.object_capacity != -1 );
+
+    return 0;
+}
+
+unsigned int alloc_shared_object(void)
+{
+    unsigned int index, offset = session.last_object_index + 1, capacity = session.object_capacity;
+
+    for (index = offset; index != offset + capacity; index++)
+        if (!session.objects[index % capacity].id)
+            break;
+    if (index != offset + capacity) index %= capacity;
+    else
+    {
+        if (grow_session_mapping()) return -1;
+        index = capacity;
+    }
+
+    assert( index < session.object_capacity );
+    session.last_object_index = index;
+
+    SHARED_WRITE_BEGIN( &session.objects[index].shm, object_shm_t )
+    {
+        /* mark the object data as uninitialized */
+        mark_block_uninitialized( (void *)shared, sizeof(*shared) );
+        CONTAINING_RECORD( shared, session_object_t, shm )->id = ++session.last_object_id;
+    }
+    SHARED_WRITE_END;
+
+    return index;
+}
+
+void free_shared_object( unsigned int index )
+{
+    if (index >= session.object_capacity) return;
+    mark_session_object_free( &session.objects[index] );
+}
+
+const desktop_shm_t *get_shared_desktop( unsigned int index )
+{
+    if (index >= session.object_capacity) return NULL;
+    return &session.objects[index].shm.desktop;
 }
 
 struct object *create_user_data_mapping( struct object *root, const struct unicode_str *name,
