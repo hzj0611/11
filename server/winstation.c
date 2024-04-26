@@ -272,6 +272,8 @@ static struct desktop *create_desktop( const struct unicode_str *name, unsigned 
     {
         if (get_error() != STATUS_OBJECT_NAME_EXISTS)
         {
+            const desktop_shm_t *desktop_shm;
+
             /* initialize it if it didn't already exist */
 
             desktop->flags = flags;
@@ -297,6 +299,21 @@ static struct desktop *create_desktop( const struct unicode_str *name, unsigned 
             list_add_tail( &winstation->desktops, &desktop->entry );
             list_init( &desktop->hotkeys );
             list_init( &desktop->pointers );
+            desktop->session_index = alloc_shared_object();
+
+            if (!(desktop_shm = get_shared_desktop( desktop->session_index )))
+            {
+                release_object( desktop );
+                return NULL;
+            }
+
+            SHARED_WRITE_BEGIN( desktop_shm, desktop_shm_t )
+            {
+                shared->cursor.x = 0;
+                shared->cursor.y = 0;
+                shared->cursor.last_change = 0;
+            }
+            SHARED_WRITE_END;
         }
         else
         {
@@ -366,6 +383,7 @@ static void desktop_destroy( struct object *obj )
     if (desktop->global_hooks) release_object( desktop->global_hooks );
     if (desktop->close_timeout) remove_timeout_user( desktop->close_timeout );
     release_object( desktop->winstation );
+    free_shared_object( desktop->session_index );
 }
 
 /* retrieve the thread desktop, checking the handle access rights */
@@ -733,10 +751,21 @@ DECL_HANDLER(close_desktop)
 /* get the thread current desktop */
 DECL_HANDLER(get_thread_desktop)
 {
+    struct desktop *desktop;
     struct thread *thread;
+
+    reply->locator.id = 0;
 
     if (!(thread = get_thread_from_id( req->tid ))) return;
     reply->handle = thread->desktop;
+
+    if (!(desktop = get_thread_desktop( thread, 0 ))) clear_error();
+    else
+    {
+        reply->locator = get_session_object_locator( desktop->session_index );
+        release_object( desktop );
+    }
+
     release_object( thread );
 }
 
