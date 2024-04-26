@@ -976,6 +976,9 @@ static void initialize_display_settings( unsigned int width, unsigned int height
     {
         DEVMODEW devmode = {.dmSize = sizeof(DEVMODEW)};
 
+        if (!(device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP))
+            continue;
+
         if (!EnumDisplaySettingsExW( device.DeviceName, ENUM_CURRENT_SETTINGS, &devmode, 0))
         {
             ERR( "Failed to query current display settings for %s.\n", debugstr_w( device.DeviceName ) );
